@@ -13,12 +13,13 @@ Options:
   --version     Show version.
 
 '''
-import sys, os, pickle, hashlib
+import sys, os, hashlib
 from docopt import docopt
 from Crypto.Cipher import AES
-from cStringIO import StringIO
 from Crypto import Random
 from getpass import getpass
+
+BS = AES.block_size
 
 class C:
     HEADER = '\033[95m'
@@ -56,10 +57,8 @@ def decrypt(iv, key, message):
 	cipher = AES.new(key, AES.MODE_CBC, iv)
 	return cipher.decrypt(message)
 
-def normalize(s):
-	while len(s) < 16:
-		s += u'\u0000'
-	return s
+pad = lambda s: s + (BS - len(s) % BS) * chr(BS - len(s) % BS) 
+unpad = lambda s : s[0:-ord(s[-1])]
 
 def hash(msg):
 	return hashlib.new('ripemd160', msg).digest()
@@ -71,13 +70,14 @@ def crypto(args):
 		size = os.path.getsize(args['FILE'])
 		pass2 = getpass('Confirm your password: ')
 		if pass1 == pass2:
-			key = normalize(pass1)
+			key = pad(pass1)
 		else:
 			fail('Password does not match')
 		message = b''
-		iv = Random.new().read(AES.block_size)
+		iv = Random.new().read(BS)
 		for piece in read_in_chunks(f, 16):
-			piece = normalize(piece)
+			if (len(piece) < BS):
+				piece = pad(piece)
 			message += encrypt(iv, key, piece)
 		obj = {
 			'iv': iv,
@@ -86,18 +86,20 @@ def crypto(args):
 			'hash': hash(pass1)
 		}
 		o = fopen(args['-o'], 'wb')
-		pickle.dump(obj, o)
+		h = hash(pass1)
+		pack = iv + h + message
+		o.write(pack)
 	elif args['de']:
-		obj = pickle.load(f)
-		print len(obj['hash'])
-		if hash(pass1) == obj['hash']:
-			key = normalize(pass1)
-			msgIO = StringIO(obj['message'])
+		data = f.read(BS+20)
+		iv = data[:BS]
+		h = data[BS:BS+20]
+		if hash(pass1) == h:
+			key = pad(pass1)
 			message = b''
-			for piece in read_in_chunks(msgIO, 16):
-				message += decrypt(obj['iv'], key, piece)
+			for piece in read_in_chunks(f, 16):
+				message += decrypt(iv, key, piece)
 			o = fopen(args['-o'], 'wb')
-			o.write(message[:obj['size']])
+			o.write(unpad(message))
 		else:
 			fail('Incorrect password.')
 
